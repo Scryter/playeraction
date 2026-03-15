@@ -119,7 +119,7 @@ async function processExercise(exercise) {
         console.log(`  📸 Generating thumbnail…`)
         execSync([
             'ffmpeg', '-y', '-i', `"${mp4Path}"`,
-            '-ss', '00:00:01', '-frames:v', '1', '-q:v', '2',
+            '-ss', '00:00:01', '-frames:v', '1', '-update', '1', '-q:v', '2',
             `"${thumbPath}"`,
         ].join(' '), { stdio: 'inherit' })
 
@@ -128,9 +128,9 @@ async function processExercise(exercise) {
         execSync([
             'ffmpeg', '-y', '-i', `"${mp4Path}"`,
             '-t', '10',
-            '-vf', 'scale=400:-2',
+            '-vf', 'scale=720:-2',
             '-c:v', 'libx264', '-c:a', 'aac',
-            '-preset', 'fast', '-crf', '28',
+            '-preset', 'fast', '-crf', '23',
             '-movflags', '+faststart',
             `"${teaserPth}"`,
         ].join(' '), { stdio: 'inherit' })
