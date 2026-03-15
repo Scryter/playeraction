@@ -1,18 +1,17 @@
 /**
- * Player.Action — HLS Video Processor
- * Runs on GitHub Actions (ubuntu-latest) which has FFmpeg available.
+ * Player.Action — Thumbnail & Teaser Generator
+ * Runs on GitHub Actions (ubuntu-latest) triggered by webhook after a video upload.
  *
  * Flow:
- *  1. Fetch pending exercises from the app API (MP4 in R2, not yet HLS)
+ *  1. Fetch exercises pending thumbnail generation from the app API
  *  2. Download each MP4 from R2
- *  3. Convert to HLS + generate thumbnail with FFmpeg
- *  4. Upload all HLS segments, manifest and thumbnail back to R2
- *  5. PATCH the app API to mark exercise as HLS processed
- *  6. Clean up temp files
+ *  3. Generate thumb.jpg (frame at 1s) and teaser.mp4 (first 10s, 400px wide) via FFmpeg
+ *  4. Upload thumb + teaser back to R2 (co-located with original MP4)
+ *  5. PATCH the app API to mark as processed
  */
 'use strict'
 
-const { execSync }  = require('child_process')
+const { execSync } = require('child_process')
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3')
 const fs   = require('fs')
 const path = require('path')
@@ -52,14 +51,15 @@ async function fetchPending() {
     return data.pending || []
 }
 
-async function markDone({ id, hlsVideoUrl, hlsManifestKey, originalVideoKey }) {
+async function markDone({ id, originalVideoKey }) {
     const res = await fetch(`${APP_URL}/api/admin/video-processor`, {
         method: 'PATCH',
         headers: {
             'Content-Type': 'application/json',
             'x-processor-key': PROCESSOR_API_KEY,
         },
-        body: JSON.stringify({ id, hlsVideoUrl, hlsManifestKey, originalVideoKey }),
+        // Mark as processed — videoUrl stays as R2 MP4, thumb/teaser now available at known paths
+        body: JSON.stringify({ id, hlsProcessed: true, originalVideoKey }),
     })
     if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -91,70 +91,64 @@ async function uploadToR2(key, filePath, contentType) {
 // ─── Core processor ───────────────────────────────────────────────────────────
 
 async function processExercise(exercise) {
-    const { id, name, videoPublicId, originalVideoKey } = exercise
-    const mp4Key = originalVideoKey || videoPublicId
+    const { id, name, originalVideoKey } = exercise
+    const mp4Key = originalVideoKey
 
     if (!mp4Key) {
-        console.warn(`  ⚠ Skipping "${name}" — no MP4 key`)
+        console.warn(`  ⚠ Skipping "${name}" — no originalVideoKey`)
         return
     }
 
-    const tmpDir  = fs.mkdtempSync(path.join(os.tmpdir(), `hls-${id}-`))
-    const mp4Path = path.join(tmpDir, 'input.mp4')
+    // Derive folder prefix from the MP4 key (strip filename)
+    // e.g. "exercises/trainer/uploadId/video.mp4" → "exercises/trainer/uploadId/"
+    const folder    = mp4Key.slice(0, mp4Key.lastIndexOf('/') + 1)
+    const thumbKey  = `${folder}thumb.jpg`
+    const teaserKey = `${folder}teaser.mp4`
+
+    const tmpDir    = fs.mkdtempSync(path.join(os.tmpdir(), `processor-${id}-`))
+    const mp4Path   = path.join(tmpDir, 'input.mp4')
+    const thumbPath = path.join(tmpDir, 'thumb.jpg')
+    const teaserPth = path.join(tmpDir, 'teaser.mp4')
 
     try {
-        // 1. Download MP4
+        // 1. Download original MP4
         console.log(`  ⬇  Downloading ${mp4Key}…`)
         await downloadFromR2(mp4Key, mp4Path)
 
-        // 2. Convert MP4 → HLS
-        console.log(`  🎬 Converting to HLS…`)
-        execSync([
-            'ffmpeg', '-y',
-            '-i', mp4Path,
-            '-c:v', 'libx264', '-c:a', 'aac',
-            '-hls_time', '4', '-hls_list_size', '0',
-            '-hls_segment_filename', path.join(tmpDir, 'seg_%03d.ts'),
-            '-preset', 'fast', '-crf', '26',
-            path.join(tmpDir, 'master.m3u8'),
-        ].join(' '), { stdio: 'inherit' })
-
-        // 3. Generate thumbnail at 1s
+        // 2. Generate thumbnail (frame at 1 second)
         console.log(`  📸 Generating thumbnail…`)
-        const thumbPath = path.join(tmpDir, 'thumb.jpg')
         execSync([
-            'ffmpeg', '-y', '-i', mp4Path,
+            'ffmpeg', '-y', '-i', `"${mp4Path}"`,
             '-ss', '00:00:01', '-frames:v', '1', '-q:v', '2',
-            thumbPath,
+            `"${thumbPath}"`,
         ].join(' '), { stdio: 'inherit' })
 
-        // 4. Upload to R2
-        const folder    = mp4Key.includes('/') ? mp4Key.slice(0, mp4Key.lastIndexOf('/') + 1) : ''
-        const hlsPrefix = `${folder}hls/${id}/`
-        const manifest  = fs.readFileSync(path.join(tmpDir, 'master.m3u8'), 'utf-8')
-        const segments  = [...manifest.matchAll(/seg_\d+\.ts/g)].map(m => m[0])
+        // 3. Generate teaser (first 10s, 400px wide, compressed)
+        console.log(`  🎬 Generating teaser (10s preview)…`)
+        execSync([
+            'ffmpeg', '-y', '-i', `"${mp4Path}"`,
+            '-t', '10',
+            '-vf', 'scale=400:-2',
+            '-c:v', 'libx264', '-c:a', 'aac',
+            '-preset', 'fast', '-crf', '28',
+            '-movflags', '+faststart',
+            `"${teaserPth}"`,
+        ].join(' '), { stdio: 'inherit' })
 
-        console.log(`  ⬆  Uploading ${segments.length} segments + manifest…`)
-        for (const seg of segments) {
-            await uploadToR2(`${hlsPrefix}${seg}`, path.join(tmpDir, seg), 'video/MP2T')
-        }
-        const manifestKey = `${hlsPrefix}master.m3u8`
-        await uploadToR2(manifestKey, path.join(tmpDir, 'master.m3u8'), 'application/x-mpegURL')
-
+        // 4. Upload thumb + teaser to R2
         if (fs.existsSync(thumbPath)) {
-            await uploadToR2(`${hlsPrefix}thumb.jpg`, thumbPath, 'image/jpeg')
-            console.log(`  🖼  Thumbnail uploaded`)
+            await uploadToR2(thumbKey, thumbPath, 'image/jpeg')
+            console.log(`  🖼  Thumbnail → ${thumbKey}`)
+        }
+        if (fs.existsSync(teaserPth)) {
+            await uploadToR2(teaserKey, teaserPth, 'video/mp4')
+            console.log(`  🎞  Teaser → ${teaserKey}`)
         }
 
-        // 5. Mark done in DB
-        await markDone({
-            id,
-            hlsVideoUrl:    `/api/videos/${manifestKey}`,
-            hlsManifestKey: manifestKey,
-            originalVideoKey: mp4Key,
-        })
-
+        // 5. Mark as processed in DB
+        await markDone({ id, originalVideoKey: mp4Key })
         console.log(`  ✅ Done — "${name}"`)
+
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -163,7 +157,7 @@ async function processExercise(exercise) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-    console.log('🎬 Player.Action — HLS Processor\n')
+    console.log('🖼  Player.Action — Thumbnail & Teaser Generator\n')
 
     const pending = await fetchPending()
 
@@ -172,7 +166,7 @@ async function main() {
         return
     }
 
-    console.log(`📋 ${pending.length} exercise(s) to convert:\n`)
+    console.log(`📋 ${pending.length} exercise(s) to process:\n`)
 
     let ok = 0, fail = 0
 
@@ -188,7 +182,7 @@ async function main() {
     }
 
     console.log(`\n────────────────────────────`)
-    console.log(`✅ ${ok} converted  ❌ ${fail} failed`)
+    console.log(`✅ ${ok} processed  ❌ ${fail} failed`)
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1) })
