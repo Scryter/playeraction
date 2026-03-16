@@ -11,11 +11,22 @@
  */
 'use strict'
 
-const { execSync } = require('child_process')
+const { spawnSync } = require('child_process')
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3')
 const fs   = require('fs')
 const path = require('path')
 const os   = require('os')
+
+// ─── FFmpeg helper ─────────────────────────────────────────────────────────────
+// Uses spawnSync with an argument array (no shell interpolation) to structurally
+// prevent shell injection — paths are passed as discrete args, never concatenated.
+function ffmpeg(args) {
+    const result = spawnSync('ffmpeg', args, { stdio: 'inherit' })
+    if (result.status !== 0) {
+        throw new Error(`ffmpeg exited with code ${result.status}`)
+    }
+}
+
 
 const {
     R2_ACCOUNT_ID,
@@ -117,23 +128,23 @@ async function processExercise(exercise) {
 
         // 2. Generate thumbnail (frame at 1 second)
         console.log(`  📸 Generating thumbnail…`)
-        execSync([
-            'ffmpeg', '-y', '-i', `"${mp4Path}"`,
+        ffmpeg([
+            '-y', '-i', mp4Path,
             '-ss', '00:00:01', '-frames:v', '1', '-update', '1', '-q:v', '2',
-            `"${thumbPath}"`,
-        ].join(' '), { stdio: 'inherit' })
+            thumbPath,
+        ])
 
-        // 3. Generate teaser (first 10s, 400px wide, compressed)
+        // 3. Generate teaser (first 10s, 720px wide, compressed)
         console.log(`  🎬 Generating teaser (10s preview)…`)
-        execSync([
-            'ffmpeg', '-y', '-i', `"${mp4Path}"`,
+        ffmpeg([
+            '-y', '-i', mp4Path,
             '-t', '10',
             '-vf', 'scale=720:-2',
             '-c:v', 'libx264', '-c:a', 'aac',
             '-preset', 'fast', '-crf', '23',
             '-movflags', '+faststart',
-            `"${teaserPth}"`,
-        ].join(' '), { stdio: 'inherit' })
+            teaserPth,
+        ])
 
         // 4. Upload thumb + teaser to R2
         if (fs.existsSync(thumbPath)) {

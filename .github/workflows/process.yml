@@ -5,22 +5,30 @@ on:
     - cron: '*/10 * * * *'   # every 10 minutes
   workflow_dispatch:           # manual trigger
 
+# Minimal GITHUB_TOKEN permissions — this job only reads the repo
+permissions:
+  contents: read
+
 jobs:
   process-hls:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 60
+    timeout-minutes: 30       # reduced from 60 — processing should finish well within 30m
 
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to commit SHA to prevent tag-poisoning supply chain attacks
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install @aws-sdk/client-s3 node-fetch
+        # node-fetch removed — Node 20 has native fetch
+        # Using ci for reproducible installs from package-lock.json
+        run: npm ci
 
       - name: Install FFmpeg
         run: |
