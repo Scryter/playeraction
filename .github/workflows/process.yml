@@ -26,9 +26,8 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        # node-fetch removed — Node 20 has native fetch
-        # Using ci for reproducible installs from package-lock.json
-        run: npm ci
+        # node-fetch removed — Node 20 has native fetch; @aws-sdk/client-s3 only
+        run: npm install --omit=dev
 
       - name: Install FFmpeg
         run: |
