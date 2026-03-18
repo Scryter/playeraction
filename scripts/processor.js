@@ -5,7 +5,7 @@
  * Flow:
  *  1. Fetch exercises pending thumbnail generation from the app API
  *  2. Download each MP4 from R2
- *  3. Generate thumb.jpg (frame at 1s) and teaser.mp4 (first 10s, 400px wide) via FFmpeg
+ *  3. Generate thumb.jpg (frame at 1s) and teaser.mp4 (first 10s, 720px wide) via FFmpeg
  *  4. Upload thumb + teaser back to R2 (co-located with original MP4)
  *  5. PATCH the app API to mark as processed
  */
@@ -26,7 +26,6 @@ function ffmpeg(args) {
         throw new Error(`ffmpeg exited with code ${result.status}`)
     }
 }
-
 
 const {
     R2_ACCOUNT_ID,
