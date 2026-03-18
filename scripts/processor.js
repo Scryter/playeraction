@@ -163,6 +163,7 @@ async function processExercise(exercise) {
         execSync([
             'ffmpeg', '-y', '-i', `"${mp4Path}"`,
             '-profile:v', 'baseline', '-level', '3.0',
+            '-vf', "scale='min(1920,iw)':trunc(ow/a/2)*2",  // cap 1080p, preserva aspect ratio
             '-c:v', 'libx264', '-c:a', 'aac',
             '-hls_time', '10',
             '-hls_playlist_type', 'vod',
