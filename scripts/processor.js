@@ -13,7 +13,7 @@
  */
 'use strict'
 
-const { execSync } = require('child_process')
+const { execSync, execFileSync } = require('child_process')
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3')
 const fs   = require('fs')
 const path = require('path')
@@ -156,20 +156,20 @@ async function processExercise(exercise) {
             `"${teaserPth}"`,
         ].join(' '), { stdio: 'inherit' })
 
-        // 4. Generate HLS playlist + segments (adaptive streaming)
+        // 4. Generate HLS playlist + segments (cap 1080p, sem passar pelo shell para evitar syntax error em filtros)
         await updateProgress(id, 60)
         console.log(`  📡 Generating HLS playlist + segments…`)
         fs.mkdirSync(hlsDir, { recursive: true })
-        execSync([
-            'ffmpeg', '-y', '-i', `"${mp4Path}"`,
+        execFileSync('ffmpeg', [
+            '-y', '-i', mp4Path,
             '-profile:v', 'baseline', '-level', '3.0',
             '-vf', "scale='min(1920,iw)':trunc(ow/a/2)*2",  // cap 1080p, preserva aspect ratio
             '-c:v', 'libx264', '-c:a', 'aac',
             '-hls_time', '10',
             '-hls_playlist_type', 'vod',
-            '-hls_segment_filename', `"${path.join(hlsDir, 'segment%03d.ts')}"`,
-            `"${path.join(hlsDir, 'master.m3u8')}"`,
-        ].join(' '), { stdio: 'inherit' })
+            '-hls_segment_filename', path.join(hlsDir, 'segment%03d.ts'),
+            path.join(hlsDir, 'master.m3u8'),
+        ], { stdio: 'inherit' })
 
         // 5. Upload thumb + teaser to R2
         await updateProgress(id, 80)
