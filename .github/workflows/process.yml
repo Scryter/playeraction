@@ -3,7 +3,7 @@ name: HLS Video Processor
 on:
   schedule:
     - cron: '*/10 * * * *'   # every 10 minutes
-  workflow_dispatch:           # manual trigger
+  workflow_dispatch:           # manual trigger / webhook trigger from app
 
 # Minimal GITHUB_TOKEN permissions — this job only reads the repo
 permissions:
@@ -13,7 +13,7 @@ jobs:
   process-hls:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 30       # reduced from 60 — processing should finish well within 30m
+    timeout-minutes: 30
 
     steps:
       # Pinned to commit SHA to prevent tag-poisoning supply chain attacks
@@ -29,10 +29,20 @@ jobs:
         # node-fetch removed — Node 20 has native fetch; @aws-sdk/client-s3 only
         run: npm install --omit=dev
 
-      - name: Install FFmpeg
+      - name: Cache FFmpeg binary
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/ffmpeg
+          key: ffmpeg-static-amd64-v1
+
+      - name: Install FFmpeg (static binary, skip if cached)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          tar -xf ffmpeg-release-amd64-static.tar.xz
+          sudo mv ffmpeg-*-static/ffmpeg /usr/local/bin/ffmpeg
+          rm -rf ffmpeg-*-static ffmpeg-release-amd64-static.tar.xz
 
       - name: Run HLS processor
         env:
